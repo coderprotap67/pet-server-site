@@ -1,11 +1,15 @@
 {
   "dependencies": {
+    "@better-auth/mongo-adapter": "^1.6.11",
+    "bcryptjs": "^3.0.3",
     "better-auth": "^1.6.11",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "jose-cjs": "^6.2.3",
     "jsonwebtoken": "^9.0.3",
+    "mongodb": "^7.2.0",
     "mongoose": "^9.6.2"
   },
   "devDependencies": {

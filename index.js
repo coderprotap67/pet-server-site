@@ -1,392 +1,357 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const jwt = require('jsonwebtoken');
-const cookieParser = require('cookie-parser');
-const cors = require('cors');
-require('dotenv').config();
-
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
-const PORT = process.env.PORT || 5000;
-
-// ==========================================
-// 1. MIDDLEWARE CONFIGURATION
-// ==========================================
+const port = process.env.PORT || 5000;
+app.use(cors());
 app.use(express.json());
-app.use(cookieParser());
-app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
-  credentials: true
-}));
-
-// ==========================================
-// 2. MONGO_DB CONNECTION INITIALIZATION
-// ==========================================
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('MongoDB cluster linked successfully.'))
-  .catch((err) => console.error('Database connection breakdown:', err));
-
-// ==========================================
-// 3. DATABASE SCHEMA & MODEL DEFINITIONS
-// ==========================================
-
-// Pet Schema
-const petSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  species: { type: String, required: true, enum: ['Dog', 'Cat', 'Bird', 'Rabbit', 'Other'] },
-  breed: { type: String, required: true },
-  age: { type: Number, required: true },
-  gender: { type: String, required: true, enum: ['Male', 'Female'] },
-  imageUrl: { type: String, required: true },
-  healthStatus: { type: String, required: true },
-  vaccinationStatus: { type: String, required: true },
-  location: { type: String, required: true },
-  adoptionFee: { type: Number, required: true, default: 0 },
-  description: { type: String, required: true },
-  ownerEmail: { type: String, required: true, index: true },
-  status: { type: String, required: true, enum: ['available', 'adopted'], default: 'available' }
-}, { timestamps: true });
-
-const Pet = mongoose.model('Pet', petSchema);
-
-// Adoption Request Schema
-const adoptionRequestSchema = new mongoose.Schema({
-  petId: { type: mongoose.Schema.Types.ObjectId, ref: 'Pet', required: true },
-  petName: { type: String, required: true },
-  ownerEmail: { type: String, required: true, index: true },
-  requesterName: { type: String, required: true },
-  requesterEmail: { type: String, required: true, index: true },
-  pickupDate: { type: Date, required: true },
-  message: { type: String, required: true },
-  status: { type: String, required: true, enum: ['pending', 'approved', 'rejected'], default: 'pending' }
-}, { timestamps: true });
-
-const AdoptionRequest = mongoose.model('AdoptionRequest', adoptionRequestSchema);
-
-// Wishlist Schema
-const wishlistSchema = new mongoose.Schema({
-  userEmail: { type: String, required: true, index: true },
-  petId: { type: mongoose.Schema.Types.ObjectId, ref: 'Pet', required: true }
-}, { timestamps: true });
-wishlistSchema.index({ userEmail: 1, petId: 1 }, { unique: true });
-
-const Wishlist = mongoose.model('Wishlist', wishlistSchema);
-
-// User Schema (Simulating Better-Auth Session Verification Layout)
-const userSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  photoUrl: { type: String }
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
 });
-const User = mongoose.model('User', userSchema);
 
-// ==========================================
-// 4. SECURITY & AUTHENTICATION MIDDLEWARE
-// ==========================================
 const verifyToken = (req, res, next) => {
-  const token = req.cookies.token;
-  if (!token) {
-    return res.status(401).json({ success: false, message: "Access denied. Token missing." });
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).send({
+      success: false,
+      message: "Unauthorized Access",
+    });
   }
-  try {
-    const verified = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = verified; 
+  const token = authHeader.split(" ")[1];
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(403).send({
+        success: false,
+        message: "Forbidden Access",
+      });
+    }
+    req.user = decoded;
     next();
-  } catch (error) {
-    return res.status(403).json({ success: false, message: "Invalid or expired token security layer." });
-  }
+  });
 };
-
-// ==========================================
-// 5. API ROUTE ROUTERS (CRUD & BUSINESS LOGIC)
-// ==========================================
-
-// --- AUTH ROUTING ENDPOINTS ---
-app.post('/api/auth/register', async (req, res) => {
+async function run() {
   try {
-    const { name, email, password, confirmPassword, photoUrl } = req.body;
-    
-    if (password.length < 6 || !/[A-Z]/.test(password) || !/[a-z]/.test(password)) {
-      return res.status(400).json({ message: "Password structural constraints violated." });
-    }
-    if (password !== confirmPassword) {
-      return res.status(400).json({ message: "Passwords mismatch values." });
-    }
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) return res.status(400).json({ message: "Email mapping collision." });
-
-    const newUser = new User({ name, email, password, photoUrl });
-    await newUser.save();
-
-    const token = jwt.sign({ id: newUser._id, email: newUser.email, name: newUser.name, photoUrl: newUser.photoUrl }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    
-    res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: 7 * 24 * 60 * 60 * 1000 });
-    res.status(201).json({ success: true, user: { name, email, photoUrl } });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user || user.password !== password) {
-      return res.status(401).json({ message: "Invalid cryptographic credentials matches." });
-    }
-
-    const token = jwt.sign({ id: user._id, email: user.email, name: user.name, photoUrl: user.photoUrl }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    
-    res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'none', maxAge: 7 * 24 * 60 * 60 * 1000 });
-    res.status(200).json({ success: true, user: { name: user.name, email: user.email, photoUrl: user.photoUrl } });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.get('/api/auth/me', verifyToken, (req, res) => {
-  res.status(200).json({ success: true, user: req.user });
-});
-
-app.post('/api/auth/logout', (req, res) => {
-  res.clearCookie('token');
-  res.status(200).json({ success: true, message: "Session wiped successfully." });
-});
-
-
-// --- PET MANAGEMENT ENDPOINTS ---
-app.get('/api/pets', async (req, res) => {
-  try {
-    const { search, species } = req.query;
-    let queryPayload = {};
-
-    if (search) {
-      queryPayload.name = { $regex: search, $options: 'i' };
-    }
-    if (species) {
-      queryPayload.species = { $in: species.split(',') };
-    }
-
-    const matchedPets = await Pet.find(queryPayload).sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: matchedPets });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-app.get('/api/pets/my-listings', verifyToken, async (req, res) => {
-  try {
-    const listings = await Pet.find({ ownerEmail: req.user.email });
-    res.status(200).json({ success: true, data: listings });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.get('/api/pets/:id', async (req, res) => {
-  try {
-    const pet = await Pet.findById(req.params.id);
-    if (!pet) return res.status(404).json({ message: "Asset profile missing." });
-    res.status(200).json({ success: true, data: pet });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post('/api/pets', verifyToken, async (req, res) => {
-  try {
-    const newPet = new Pet({ ...req.body, ownerEmail: req.user.email });
-    await newPet.save();
-    res.status(201).json({ success: true, data: newPet });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.put('/api/pets/:id', verifyToken, async (req, res) => {
-  try {
-    const pet = await Pet.findById(req.params.id);
-    if (!pet) return res.status(404).json({ message: "Pet missing." });
-    if (pet.ownerEmail !== req.user.email) return res.status(403).json({ message: "Access forbidden." });
-
-    const updatedPet = await Pet.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    res.status(200).json({ success: true, data: updatedPet });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.delete('/api/pets/:id', verifyToken, async (req, res) => {
-  try {
-    const pet = await Pet.findById(req.params.id);
-    if (!pet) return res.status(404).json({ message: "Pet missing." });
-    if (pet.ownerEmail !== req.user.email) return res.status(403).json({ message: "Access forbidden." });
-
-    await Pet.findByIdAndDelete(req.params.id);
-    res.status(200).json({ success: true, message: "Asset document eliminated." });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-
-// --- CRITICAL ADOPTION APPLICATION & CASCADE SINGLE-APPROVAL ROUTING ---
-app.post('/api/requests', verifyToken, async (req, res) => {
-  try {
-    const { petId, pickupDate, message } = req.body;
-    const pet = await Pet.findById(petId);
-    if (!pet) return res.status(404).json({ message: "Pet asset not found." });
-
-    // Business Constraint Rule Implementation
-    if (pet.ownerEmail === req.user.email) {
-      return res.status(403).json({ message: "Action forbidden: You cannot apply to adopt your own listed pet." });
-    }
-    if (pet.status === 'adopted') {
-      return res.status(400).json({ message: "This pet has already been adopted." });
-    }
-
-    const newRequest = new AdoptionRequest({
-      petId,
-      petName: pet.name,
-      ownerEmail: pet.ownerEmail,
-      requesterName: req.user.name,
-      requesterEmail: req.user.email,
-      pickupDate,
-      message
+    const usersCollection = client.db("petDB").collection("users");
+    const petsCollection = client.db("petDB").collection("pets");
+    const adoptionCollection = client.db("petDB").collection("adoptions");
+    app.post("/register", async (req, res) => {
+      try {
+        const { name, email, password, photo } = req.body;
+        const existingUser = await usersCollection.findOne({ email });
+        if (existingUser) {
+          return res.status(400).send({
+            success: false,
+            message: "User already exists",
+          });
+        }
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = {
+          name,
+          email,
+          password: hashedPassword,
+          photo,
+          role: "user",
+          createdAt: new Date(),
+        };
+        const result = await usersCollection.insertOne(user);
+        const token = jwt.sign(
+          {
+            email,
+          },
+          process.env.JWT_SECRET,
+          {
+            expiresIn: "7d",
+          }
+        );
+        res.send({
+          success: true,
+          message: "Registration successful",
+          token,
+          result,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
     });
 
-    await newRequest.save();
-    res.status(201).json({ success: true, data: newRequest });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+    app.post("/login", async (req, res) => {
+      try {
+        const { email, password } = req.body;
+        const user = await usersCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid password",
+          });
+        }
+        const token = jwt.sign(
+          {
+            email: user.email,
+          },
+          process.env.JWT_SECRET,
+          {
+            expiresIn: "7d",
+          }
+        );
+        res.send({
+          success: true,
+          message: "Login successful",
+          token,
+          user,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    app.post("/pets", verifyToken, async (req, res) => {
+      try {
+        const pet = req.body;
+        pet.status = "available";
+        pet.createdAt = new Date();
+        const result = await petsCollection.insertOne(pet);
+        res.send({
+          success: true,
+          message: "Pet added successfully",
+          result,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+
+    app.get("/pets", async (req, res) => {
+      try {
+        const result = await petsCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+
+      }
+    });
+    app.get("/pets/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await petsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    app.get("/my-listings/:email", verifyToken, async (req, res) => {
+      try {
+        const email = req.params.email;
+        const result = await petsCollection
+          .find({
+            ownerEmail: email,
+          })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+
+    app.put("/pets/:id", verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const updatedPet = req.body;
+        const result = await petsCollection.updateOne(
+          {
+            _id: new ObjectId(id),
+          },
+          {
+            $set: updatedPet,
+          }
+        );
+        res.send({
+          success: true,
+          message: "Pet updated successfully",
+          result,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+    app.delete("/pets/:id", verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const result = await petsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send({
+          success: true,
+          message: "Pet deleted successfully",
+          result,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+    app.post("/adoptions", verifyToken, async (req, res) => {
+      try {
+        const adoptionData = req.body;
+        adoptionData.status = "pending";
+        adoptionData.createdAt = new Date();
+        const result = await adoptionCollection.insertOne(adoptionData);
+        res.send({
+          success: true,
+          message: "Adoption request sent",
+          result,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+
+      }
+    });
+
+    app.get("/my-requests/:email", verifyToken, async (req, res) => {
+      try {
+        const email = req.params.email;
+        const result = await adoptionCollection
+          .find({
+            userEmail: email,
+          })
+          .toArray();
+      res.send(result);
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+    app.get("/", (req, res) => {
+      res.send("Pet Adoption Server Running");
+    });
+
+    await client.connect();
+    console.log("MongoDB Connected");
+  } finally {
   }
-});
-
-app.get('/api/requests/my-requests', verifyToken, async (req, res) => {
-  try {
-    const claims = await AdoptionRequest.find({ requesterEmail: req.user.email });
-    res.status(200).json({ success: true, data: claims });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.get('/api/requests/pet/:petId', verifyToken, async (req, res) => {
-  try {
-    const requests = await AdoptionRequest.find({ petId: req.params.petId });
-    res.status(200).json({ success: true, data: requests });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// Single-Approval Policy Core Pipeline Execution (Using Transaction Sim)
-app.patch('/api/requests/:requestId/process', verifyToken, async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { requestId } = req.params;
-    const { action } = req.body; // Expecting strings: 'approved' or 'rejected'
-
-    const targetRequest = await AdoptionRequest.findById(requestId).session(session);
-    if (!targetRequest) {
-      await session.abortTransaction();
-      return res.status(404).json({ message: "Adoption claim request not found." });
-    }
-    if (targetRequest.ownerEmail !== req.user.email) {
-      await session.abortTransaction();
-      return res.status(403).json({ message: "Unauthorized handling of listing requests." });
-    }
-    if (targetRequest.status !== 'pending') {
-      await session.abortTransaction();
-      return res.status(400).json({ message: "This request has already been processed." });
-    }
-
-    if (action === 'rejected') {
-      targetRequest.status = 'rejected';
-      await targetRequest.save({ session });
-      await session.commitTransaction();
-      session.endSession();
-      return res.status(200).json({ success: true, message: "Request successfully rejected." });
-    }
-
-    if (action === 'approved') {
-      // 1. Update targeting request status mapping
-      targetRequest.status = 'approved';
-      await targetRequest.save({ session });
-
-      // 2. Cascade state modification across targeted Pet document
-      await Pet.findByIdAndUpdate(targetRequest.petId, { status: 'adopted' }, { session });
-
-      // 3. Atomically auto-reject all other alternative requests pending on the same pet
-      await AdoptionRequest.updateMany(
-        { petId: targetRequest.petId, _id: { $ne: targetRequest._id }, status: 'pending' },
-        { status: 'rejected' },
-        { session }
-      );
-
-      await session.commitTransaction();
-      session.endSession();
-      return res.status(200).json({ success: true, message: "Request approved. Outstandings rejected automatically." });
-    }
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    res.status(500).json({ message: error.message });
-  }
-});
-
-app.delete('/api/requests/:id', verifyToken, async (req, res) => {
-  try {
-    const request = await AdoptionRequest.findById(req.params.id);
-    if (!request) return res.status(404).json({ message: "Request missing." });
-    if (request.requesterEmail !== req.user.email) return res.status(403).json({ message: "Unauthorized cancel action." });
-
-    await AdoptionRequest.findByIdAndDelete(req.params.id);
-    res.status(200).json({ success: true, message: "Claim retracted." });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
+}
+run().catch(console.dir);
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });
 
 
-// --- WISHLIST MANAGEMENT ENDPOINTS ---
-app.get('/api/wishlist', verifyToken, async (req, res) => {
-  try {
-    const items = await Wishlist.find({ userEmail: req.user.email }).populate('petId');
-    res.status(200).json({ success: true, data: items });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.post('/api/wishlist', verifyToken, async (req, res) => {
-  try {
-    const { petId } = req.body;
-    const newWishItem = new Wishlist({ userEmail: req.user.email, petId });
-    await newWishItem.save();
-    res.status(201).json({ success: true, data: newWishItem });
-  } catch (err) {
-    if (err.code === 11000) return res.status(400).json({ message: "Asset already marked inside wishlist array." });
-    res.status(500).json({ message: err.message });
-  }
-});
-
-app.delete('/api/wishlist/:petId', verifyToken, async (req, res) => {
-  try {
-    await Wishlist.findOneAndDelete({ userEmail: req.user.email, petId: req.params.petId });
-    res.status(200).json({ success: true, message: "Removed from bookmark index successfully." });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
 
 
-// ==========================================
-// 6. SERVER BOOT INITIALIZATION
-// ==========================================
-app.listen(PORT, () => {
-  console.log(`Pet Adoption Backend Engine executing smoothly over port ${PORT}`);
-});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// const express = require('express');
+// const { MongoClient, ServerApiVersion } = require('mongodb');
+// const uri =MONGODB_URI;
+// const app = express();
+// const PORT = process.env.PORT || 5000;
+
+// const client = new MongoClient(uri, {
+//   serverApi: {
+//     version: ServerApiVersion.v1,
+//     strict: true,
+//     deprecationErrors: true,
+//   }
+// });
+
+
+// async function run() {
+//   try {
+//     await client.connect();
+//     await client.db("admin").command({ ping: 1 });
+//     console.log("Pinged your deployment. You successfully connected to MongoDB!");
+//   } finally {
+//     await client.close();
+//   }
+// }
+// run().catch(console.dir);
+
+// app.get('/', (req, res) => {
+//   res.send('Hello, World!');
+// });
+
+// app.listen(PORT, () => {
+//   console.log(`Server is running on port ${PORT}`);
+// });
