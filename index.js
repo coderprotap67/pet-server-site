@@ -1,5 +1,4 @@
 require("dotenv").config();
-
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -9,11 +8,9 @@ const {
   ServerApiVersion,
   ObjectId,
 } = require("mongodb");
-
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const session = require("express-session");
-
 const app = express();
 const port = process.env.PORT || 5000;
 app.use(
@@ -24,7 +21,6 @@ app.use(
 );
 
 app.use(express.json());
-
 app.use(
   session({
     secret: "pet-secret",
@@ -35,9 +31,7 @@ app.use(
 
 app.use(passport.initialize());
 app.use(passport.session());
-
 const uri = process.env.MONGODB_URI;
-
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -45,17 +39,14 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
-
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
-
   if (!authHeader) {
     return res.status(401).send({
       success: false,
       message: "Unauthorized Access",
     });
   }
-
   const token = authHeader.split(" ")[1];
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
@@ -68,7 +59,6 @@ const verifyToken = (req, res, next) => {
     next();
   });
 };
-
 passport.use(
   new GoogleStrategy(
     {
@@ -82,7 +72,6 @@ passport.use(
         email: profile.emails[0].value,
         image: profile.photos[0].value,
       };
-
       return done(null, user);
     }
   )
@@ -95,42 +84,26 @@ async function run() {
     await client.connect();
 
     console.log("MongoDB Connected");
-
     const db = client.db("simpleCurd");
-
     const usersCollection = db.collection("users");
     const petsCollection = db.collection("pets");
     const adoptionCollection = db.collection("adoptions");
-
     app.post("/register", async (req, res) => {
       try {
         const { name, email, password, image } = req.body;
-
         const existingUser = await usersCollection.findOne({ email });
-
         if (existingUser) {
           return res.status(400).send({
             success: false,
             message: "User already exists",
           });
         }
-
         const hashedPassword = await bcrypt.hash(password, 10);
-
-        const user = {
-          name,
-          email,
-          password: hashedPassword,
-          image,
-          role: "user",
-          createdAt: new Date(),
+        const user = {name,email,password: hashedPassword,image,role: "user",createdAt: new Date(),
         };
 
         await usersCollection.insertOne(user);
-
-        const token = jwt.sign(
-          { email },
-          process.env.JWT_SECRET,
+        const token = jwt.sign({ email },process.env.JWT_SECRET,
           { expiresIn: "7d" }
         );
         res.send({ success: true, token, user });
@@ -144,7 +117,6 @@ async function run() {
    app.post("/login", async (req, res) => {
       try {
         const { email, password } = req.body;
-
         const user = await usersCollection.findOne({ email });
         if (!user) {
           return res.status(404).send({
@@ -159,10 +131,7 @@ async function run() {
             message: "Wrong password",
           });
         }
-        const token = jwt.sign(
-          { email: user.email },
-          process.env.JWT_SECRET,
-          { expiresIn: "7d" }
+        const token = jwt.sign( { email: user.email }, process.env.JWT_SECRET, { expiresIn: "7d" }
         );
 
         res.send({ success: true, token, user });
