@@ -15,7 +15,7 @@ const app = express();
 const port = process.env.PORT || 5000;
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: process.env.CLIENT_URL,
     credentials: true,
   })
 );
@@ -64,7 +64,7 @@ passport.use(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:5000/auth/google/callback",
+      callbackURL: `${process.env.GOOGLE_CALLBACK_URL}/auth/google/callback`,
     },
     async (accessToken, refreshToken, profile, done) => {
       const user = {
@@ -149,7 +149,7 @@ async function run() {
     app.get(
       "/auth/google/callback",
       passport.authenticate("google", {
-        failureRedirect: "http://localhost:3000/login",
+        failureRedirect: `${process.env.CLIENT_URL}/login`,
       }),
       async (req, res) => {
         const gUser = req.user;
@@ -168,7 +168,7 @@ async function run() {
           process.env.JWT_SECRET,
           { expiresIn: "7d" }
         );
-        res.redirect(`http://localhost:3000?token=${token}`);
+        res.redirect(`${process.env.CLIENT_URL}?token=${token}`);
       }
     );
     app.get("/auth/google/success", (req, res) => {
@@ -280,6 +280,7 @@ async function run() {
   }
 }
 run().catch(console.dir);
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+// app.listen(port, () => {
+//   console.log(`Server running on port ${port}`);
+// });
+module.exports = app;
