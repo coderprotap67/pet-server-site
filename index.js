@@ -16,8 +16,6 @@ const session = require("express-session");
 
 const app = express();
 const port = process.env.PORT || 5000;
-
-// ---------------- MIDDLEWARE ----------------
 app.use(
   cors({
     origin: "http://localhost:3000",
@@ -27,7 +25,6 @@ app.use(
 
 app.use(express.json());
 
-// ---------------- SESSION ----------------
 app.use(
   session({
     secret: "pet-secret",
@@ -39,7 +36,6 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session());
 
-// ---------------- MONGODB ----------------
 const uri = process.env.MONGODB_URI;
 
 const client = new MongoClient(uri, {
@@ -50,7 +46,6 @@ const client = new MongoClient(uri, {
   },
 });
 
-// ---------------- JWT VERIFY ----------------
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
 
@@ -62,7 +57,6 @@ const verifyToken = (req, res, next) => {
   }
 
   const token = authHeader.split(" ")[1];
-
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
       return res.status(403).send({
@@ -70,13 +64,11 @@ const verifyToken = (req, res, next) => {
         message: "Forbidden Access",
       });
     }
-
     req.user = decoded;
     next();
   });
 };
 
-// ---------------- GOOGLE STRATEGY ----------------
 passport.use(
   new GoogleStrategy(
     {
@@ -95,11 +87,9 @@ passport.use(
     }
   )
 );
-
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((user, done) => done(null, user));
 
-// ---------------- MAIN APP ----------------
 async function run() {
   try {
     await client.connect();
@@ -112,7 +102,6 @@ async function run() {
     const petsCollection = db.collection("pets");
     const adoptionCollection = db.collection("adoptions");
 
-    // ---------------- REGISTER ----------------
     app.post("/register", async (req, res) => {
       try {
         const { name, email, password, image } = req.body;
@@ -144,9 +133,7 @@ async function run() {
           process.env.JWT_SECRET,
           { expiresIn: "7d" }
         );
-
         res.send({ success: true, token, user });
-
       } catch (err) {
         res.status(500).send({
           success: false,
@@ -154,30 +141,24 @@ async function run() {
         });
       }
     });
-
-    // ---------------- LOGIN ----------------
-    app.post("/login", async (req, res) => {
+   app.post("/login", async (req, res) => {
       try {
         const { email, password } = req.body;
 
         const user = await usersCollection.findOne({ email });
-
         if (!user) {
           return res.status(404).send({
             success: false,
             message: "User not found",
           });
         }
-
         const isMatch = await bcrypt.compare(password, user.password);
-
         if (!isMatch) {
           return res.status(400).send({
             success: false,
             message: "Wrong password",
           });
         }
-
         const token = jwt.sign(
           { email: user.email },
           process.env.JWT_SECRET,
@@ -185,7 +166,6 @@ async function run() {
         );
 
         res.send({ success: true, token, user });
-
       } catch (err) {
         res.status(500).send({
           success: false,
@@ -193,13 +173,10 @@ async function run() {
         });
       }
     });
-
-    // ---------------- GOOGLE LOGIN ----------------
     app.get(
       "/auth/google",
       passport.authenticate("google", { scope: ["profile", "email"] })
     );
-
     app.get(
       "/auth/google/callback",
       passport.authenticate("google", {
@@ -207,9 +184,7 @@ async function run() {
       }),
       async (req, res) => {
         const gUser = req.user;
-
         let user = await usersCollection.findOne({ email: gUser.email });
-
         if (!user) {
           const result = await usersCollection.insertOne({
             ...gUser,
@@ -217,21 +192,16 @@ async function run() {
             provider: "google",
             createdAt: new Date(),
           });
-
           user = { ...gUser, _id: result.insertedId };
         }
-
         const token = jwt.sign(
           { email: user.email },
           process.env.JWT_SECRET,
           { expiresIn: "7d" }
         );
-
         res.redirect(`http://localhost:3000?token=${token}`);
       }
     );
-
-    // ---------------- GOOGLE SUCCESS ----------------
     app.get("/auth/google/success", (req, res) => {
       if (req.user) {
         res.send({
@@ -245,42 +215,76 @@ async function run() {
         });
       }
     });
-
-    // ---------------- CURRENT USER ----------------
     app.get("/me", verifyToken, async (req, res) => {
       const user = await usersCollection.findOne({ email: req.user.email });
-
       res.send({
         success: true,
         data: user,
       });
     });
-
-    // ---------------- PETS ----------------
-    app.get("/pets", async (req, res) => {
-      const result = await petsCollection.find().toArray();
-
-      res.send({
-        success: true,
-        data: result,
-      });
+    app.get("/pets/my-listings", verifyToken, async (req, res) => {
+      const email = req.user.email;
+      const pets = await petsCollection.find({ ownerEmail: email }).toArray();
+      res.send({ success: true, data: pets });
     });
-
+    app.post("/adoptions", verifyToken, async (req, res) => {
+      try {
+        const adoptionData = {
+          ...req.body,
+          requesterEmail: req.user.email,
+          status: "pending",
+          createdAt: new Date(),
+        };
+        if (adoptionData.petId && ObjectId.isValid(adoptionData.petId)) {
+           adoptionData.petId = new ObjectId(adoptionData.petId);
+        }
+        await adoptionCollection.insertOne(adoptionData);
+        res.send({ success: true, message: "Request sent successfully!" });
+      } catch (err) {
+        res.status(500).send({ success: false, message: "Failed to send request" });
+      }
+    });
+    app.get("/my-requests", verifyToken, async (req, res) => {
+      const email = req.user.email;
+      const requests = await adoptionCollection.aggregate([
+        { $match: { requesterEmail: email } },
+        {
+          $lookup: {
+            from: "pets",
+            localField: "petId",
+            foreignField: "_id",
+            as: "petDetails"
+          }
+        },
+        { $unwind: { path: "$petDetails", preserveNullAndEmptyArrays: true } }
+      ]).toArray();
+      res.send({ success: true, data: requests });
+    });
     app.get("/pets/:id", async (req, res) => {
       const id = req.params.id;
-
       let pet = await petsCollection.findOne({ _id: id });
-
       if (!pet && ObjectId.isValid(id)) {
-        pet = await petsCollection.findOne({
-          _id: new ObjectId(id),
-        });
+        pet = await petsCollection.findOne({ _id: new ObjectId(id) });
       }
+      res.send({ success: true, data: pet });
+    });
 
-      res.send({
-        success: true,
-        data: pet,
-      });
+    app.get("/pets", async (req, res) => {
+      const result = await petsCollection.find().toArray();
+      res.send({ success: true, data: result });
+    });
+
+    app.delete("/adoptions/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+      const result = await adoptionCollection.deleteOne(query);
+      res.send(result);
+    });
+    app.delete("/pets/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+      const result = await petsCollection.deleteOne(query);
+      res.send(result);
     });
 
     app.post("/pets", verifyToken, async (req, res) => {
@@ -289,28 +293,24 @@ async function run() {
         ownerEmail: req.user.email,
         createdAt: new Date(),
       };
-
       await petsCollection.insertOne(pet);
-
-      res.send({
-        success: true,
-      });
+      res.send({ success: true });
     });
-
-    // ---------------- ROOT ----------------
+    app.patch("/pets/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const updatedData = req.body;
+      const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+      const result = await petsCollection.updateOne(query, { $set: updatedData });
+      res.send({ success: true, result });
+    });
     app.get("/", (req, res) => {
-      res.send({
-        message: "Server Running",
-      });
+      res.send({ message: "Server Running" });
     });
-
   } catch (err) {
     console.log(err);
   }
 }
-
 run().catch(console.dir);
-
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
